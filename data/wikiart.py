@@ -4,6 +4,7 @@ import sys
 import os.path as osp
 from PIL import Image
 from torch.utils.data import Dataset
+from joblib import Parallel, delayed
 import pandas as pd
 import vaex as vx
 import numpy as np
@@ -39,12 +40,34 @@ class WikiArtD(Dataset):
         self.transform = transform
         self.split = split
         assert osp.exists(osp.join(root_dir, 'wikiart.csv'))
-        annotations = vx.from_csv(f'{self.root_dir}/wikiart.csv')
+        annotations = pd.read_csv(f'{self.root_dir}/wikiart.csv')
         acceptable_artists = list(set(annotations[annotations['split'] == 'database']['artist'].tolist()))
         temprepo = annotations[annotations['artist'].isin(acceptable_artists)]
-        self.pathlist = temprepo[temprepo['split'] == split]['path'].tolist()
 
-        self.namelist = list(map(lambda x: x.split('/')[-1], self.pathlist))
+        filtered_data = temprepo[temprepo['split'] == split]
+        
+        self.namelist = []
+        self.pathlist = []
+        
+        def check_file_exists(row):
+            name = row['name']
+            label = row['label'].replace(' ', '_')
+            path = osp.join(root_dir, 'wikiart', label, name)
+            path2 = osp.join(root_dir, 'wikiart', label, name.replace('not-detected-', 'not_detected_'))
+            if osp.exists(path):
+                return name, path
+            elif osp.exists(path2):
+                return name, path2
+            else:
+                print(f"Warning: Path does not exist: {path}")
+                return None
+
+        results = Parallel(n_jobs=-1)(delayed(check_file_exists)(row) for _, row in filtered_data.iterrows())
+
+        self.namelist = [result[0] for result in results if result is not None]
+        self.pathlist = [result[1] for result in results if result is not None]
+
+        print(f"Total valid images found: {len(self.pathlist)}")
 
     def __len__(self):
         return len(self.namelist)
